@@ -1,4 +1,4 @@
 name: astrbot_plugin_smart_reminder
 description: 智能定时提醒插件 - 实时分析对话,自动检测并创建定时任务,支持自然提醒、时间摆动和概率遗忘
 version: 1.0.0
-author: 插件作者
+author: hwesuer 白明 deepseek
