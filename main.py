@@ -381,19 +381,27 @@ class SmartReminder(Star):
         session_id = task.get("session_id", "")
         logger.info(f"[SmartReminder] 发送提醒 session={session_id} 内容={text}")
 
-        # 优先使用保存的事件来发送
+        # 使用保存的事件直接发送，不走 StarTools 事件管道
+        # 这样可以绕过 SmartDebounce 等插件的拦截
         event = self.session_events.get(session_id)
+        if event:
+            try:
+                await event.send(text)
+                logger.info(f"[SmartReminder] 已通过 event.send 发送提醒")
+                return
+            except Exception as e:
+                logger.error(f"[SmartReminder] event.send 发送失败: {e}")
+
+        # 如果在 session_events 中没找到，尝试使用 StarTools 兜底
         if event:
             try:
                 from astrbot.core.message.components import Plain
                 from astrbot.core.star.star_tools import StarTools
 
-                # 使用原始事件的完整 session_id 格式
-                full_session = event.session_id
                 new_message = await StarTools.create_message(
                     type=str(event.message_obj.type.value),
                     self_id=event.get_self_id(),
-                    session_id=full_session,
+                    session_id=event.session_id,
                     sender=event.message_obj.sender,
                     message=[Plain(text)],
                     message_str=text,
