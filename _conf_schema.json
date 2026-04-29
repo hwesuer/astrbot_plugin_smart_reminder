@@ -148,5 +148,10 @@
     "type": "bool",
     "default": true,
     "description": "是否启用自动取消任务 (从对话中检测取消意图并自动移除任务)"
+  },
+  "restore_tasks_on_startup": {
+    "type": "bool",
+    "default": true,
+    "description": "启动时是否自动恢复未完成的任务 (关闭后插件启动时不加载已有任务)"
   }
 }

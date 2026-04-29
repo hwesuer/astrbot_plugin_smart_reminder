@@ -188,6 +188,10 @@ class SmartReminder(Star):
     # ==================== Task Persistence ====================
 
     async def _load_tasks(self):
+        if not self._get_config("restore_tasks_on_startup", True):
+            self.tasks = []
+            logger.info("[SmartReminder] 启动时不恢复任务（restore_tasks_on_startup=false）")
+            return
         if os.path.exists(self.data_file):
             try:
                 with open(self.data_file, "r", encoding="utf-8") as f:
@@ -649,8 +653,8 @@ class SmartReminder(Star):
 
         # 检查是否有任务在等待该会话的回复
         for task in self.tasks:
-            if task.get("session_id") == session_id and task.get("waiting_for_reply"):
-                logger.info(f"[SmartReminder] 检测到用户回复, session={session_id}, 任务={task['id']}")
+            if task.get("session_id") == simple_session and task.get("waiting_for_reply"):
+                logger.info(f"[SmartReminder] 检测到用户回复, session={simple_session}, 任务={task['id']}")
                 task["waiting_for_reply"] = False
                 task["completed"] = True
                 if task["id"] in self.re_remind_tasks:
