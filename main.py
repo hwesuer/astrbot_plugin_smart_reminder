@@ -14,6 +14,59 @@ from astrbot.api.provider import LLMResponse
 from astrbot.api.star import Context, Star, register
 
 
+# 默认提示词预设
+DEFAULT_PROMPT_TEMPLATE = (
+    "你是一个智能助手，正在分析用户和 AI 的对话。\n"
+    "请判断用户是否提到了需要定时提醒的事情。\n\n"
+    "判断标准：\n"
+    "- 用户明确提到了一个时间点（如"晚上八点"、"明早九点"、"下周三"等）\n"
+    "- 用户提到了需要做某件事（如"上课"、"交作业"、"开会"、"吃饭"等）\n"
+    "- 用户语气是告知、安排或请求提醒，而非单纯的陈述\n\n"
+    "如果满足以上条件，返回 JSON：\n"
+    '{"should_remind": true, "time": "具体时间", "event": "事件", "context": "原文上下文", "is_important": false}\n\n'
+    '如果不满足，返回：\n'
+    '{"should_remind": false}\n\n'
+    "注意：\n"
+    '- "is_important" 根据用户是否使用了强调语气来判断\n'
+    '- 时间格式统一为 "2026-04-29 20:00" 这样的 ISO 格式\n'
+    "- 如果时间表述模糊（如"下午"），尽可能推断为合理时间"
+)
+
+DEFAULT_CANCEL_TEMPLATE = (
+    "你是一个智能助手，正在分析用户是否在取消之前设定的提醒任务。\n"
+    "用户之前设置了以下任务：\n"
+    "{tasks}\n\n"
+    "请判断用户当前的消息是否在取消其中某个任务。\n\n"
+    "支持的表达方式：\n"
+    "- 直接取消："不用提醒了""取消提醒"\n"
+    "- 变更计划："今天下午不去了""改到明天了"\n"
+    "- 已完成："作业已经交了""做完了"\n"
+    "- 否定语气："不用xxx了""别提醒了"\n\n"
+    "如果匹配到某个任务，返回 JSON：\n"
+    '{"should_cancel": true, "task_id": "匹配的任务ID", "reason": "取消原因"}\n\n'
+    '如果没有匹配，返回：\n'
+    '{"should_cancel": false}'
+)
+
+DEFAULT_ASK_STYLE_TEMPLATE = (
+    "你是一个亲切的朋友，正在提醒用户做某件事。\n"
+    "请根据以下信息生成一句简短的提醒，语气自然、贴近生活。\n\n"
+    "触发类型：{trigger_type}\n"
+    "事件：{event}\n"
+    "这是第 {retry_count} 次提醒，前几次用户没有回复。\n\n"
+    "风格要求：\n"
+    "- 第一次提醒可以直接说事\n"
+    "- 后续提醒可以带一点催促或关切的语气\n"
+    "- 不要过于正式或生硬\n"
+    "- 每次生成的文案要有变化，不要重复\n"
+    "- 控制在 30 字以内\n\n"
+    "示例风格：\n"
+    '- 准时提醒："到点了，该去{event}了~"\n'
+    '- 提前提醒："快到了，准备一下{event}吧"\n'
+    '- 推迟提醒："是不是忘了{event}了..."'
+)
+
+
 @register("astrbot_plugin_smart_reminder", "插件作者", "智能定时提醒插件 - 实时分析对话并自动创建定时任务", "1.0.0")
 class SmartReminder(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -23,6 +76,8 @@ class SmartReminder(Star):
         self.scheduled_tasks: Dict[str, asyncio.Task] = {}
         self.waiting_replies: Dict[str, str] = {}
         self.re_remind_tasks: Dict[str, asyncio.Task] = {}
+        # 保存每个会话的最新事件，用于主动发送提醒
+        self.session_events: Dict[str, AstrMessageEvent] = {}
         self.data_dir = os.path.join(os.getcwd(), "data")
         self.data_file = os.path.join(self.data_dir, "astrbot_plugin_smart_reminder_data.json")
         self._http_client: Optional[httpx.AsyncClient] = None
@@ -34,10 +89,12 @@ class SmartReminder(Star):
             self._loaded = True
 
     def _get_config(self, key: str, default=None):
-        val = getattr(self.config, key, None)
-        if val is None:
+        """安全地获取配置项，兼容 AstrBot 的配置对象"""
+        try:
+            val = self.config.get(key, default)
+            return val
+        except Exception:
             return default
-        return val
 
     @property
     def enabled(self) -> bool:
@@ -98,25 +155,23 @@ class SmartReminder(Star):
         if not text:
             return {}
         text = text.strip()
+        # 移除 markdown 代码块标记
         if text.startswith("```"):
             lines = text.split("\n")
             lines = [l for l in lines if not l.startswith("```")]
             text = "\n".join(lines).strip()
+        # 尝试直接解析
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            m = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-            if m:
-                try:
-                    return json.loads(m.group())
-                except json.JSONDecodeError:
-                    pass
-            m = re.search(r'\{.*\}', text, re.DOTALL)
-            if m:
-                try:
-                    return json.loads(m.group())
-                except json.JSONDecodeError:
-                    pass
+            pass
+        # 尝试提取花括号内的内容
+        m = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except json.JSONDecodeError:
+                pass
         return {}
 
     def _classify_keywords(self, text: str) -> str:
@@ -160,15 +215,11 @@ class SmartReminder(Star):
     def _cleanup_expired_tasks(self):
         expire_days = self._get_config("task_expire_days", 7)
         cutoff = datetime.now() - timedelta(days=expire_days)
-        before_count = len(self.tasks)
         self.tasks = [
             t for t in self.tasks
             if not (t.get("completed") or t.get("cancelled"))
             or datetime.fromisoformat(t.get("created_at", datetime.now().isoformat())) > cutoff
         ]
-        removed = before_count - len(self.tasks)
-        if removed > 0:
-            logger.info(f"[SmartReminder] 清理了 {removed} 个过期任务")
 
     # ==================== Scheduling ====================
 
@@ -249,38 +300,39 @@ class SmartReminder(Star):
         complete_forget_prob = self._get_config("complete_forget_probability", 5)
         casual_boost = self._get_config("casual_keyword_boost", 25)
 
+        # 计算有效概率
         if keyword_type == "precise":
-            logger.info(f"[SmartReminder] 任务 {task_id} 为准时类型，跳过完全遗忘检查")
+            effective_prob = 0  # 准时类无视遗忘
         elif keyword_type == "casual":
             effective_prob = min(100, complete_forget_prob + casual_boost)
         else:
             effective_prob = complete_forget_prob
 
         if keyword_type != "precise" and enable_complete_forget and random.randint(1, 100) <= effective_prob:
-            logger.info(f"[SmartReminder] 完全遗忘触发: 任务 {task_id} ({task.get('event')}) 将被删除不触发")
+            logger.info(f"[SmartReminder] 完全遗忘触发: 任务 {task_id} ({task.get('event')}) 将被删除")
             await self._remove_task(task_id)
             return
 
         retry_count = task.get("retry_count", 0)
 
         if retry_count == 0:
+            # 第一次提醒：用创建时生成的文案
             ask_text = task.get("first_ask_text") or self._get_config("default_ask_text", "到点了~")
         else:
+            # 后续提醒：用 LLM 重新生成
             ask_text = await self._generate_ask_text(task, retry_count)
 
         if ask_text:
-            await self._send_message(task, ask_text)
+            await self._send_reminder(task, ask_text)
 
         task["retry_count"] = retry_count + 1
         await self._save_tasks()
 
+        # 计算重复提醒次数（随机摆动）
         max_count = self._get_config("re_remind_max_count", 3)
+        actual_max = max(1, max_count + random.randint(-1, 1))
         if keyword_type == "precise":
             actual_max = max(1, max_count + random.randint(0, 1))
-            logger.info(f"[SmartReminder] 准时任务重复提醒次数: {actual_max}")
-        else:
-            actual_max = max(1, max_count + random.randint(-1, 1))
-            logger.info(f"[SmartReminder] 普通任务重复提醒次数: {actual_max}")
 
         enable_re_remind = self._get_config("enable_re_remind", True)
         if enable_re_remind and retry_count < actual_max:
@@ -292,7 +344,7 @@ class SmartReminder(Star):
             task["completed"] = True
             task["waiting_for_reply"] = False
             await self._save_tasks()
-            logger.info(f"[SmartReminder] 任务 {task_id} 完成 (提醒次数已达上限或重提醒已禁用)")
+            logger.info(f"[SmartReminder] 任务 {task_id} 完成")
 
     async def _generate_ask_text(self, task: Dict, retry_count: int) -> Optional[str]:
         use_llm = self._get_config("use_llm_ask", True)
@@ -301,7 +353,7 @@ class SmartReminder(Star):
 
         template = self._get_config("ask_style_template", "")
         if not template:
-            return self._get_config("default_ask_text", "到点了~")
+            template = DEFAULT_ASK_STYLE_TEMPLATE
 
         trigger_type = task.get("trigger_type", "准时提醒")
         prompt = template.format(
@@ -320,16 +372,41 @@ class SmartReminder(Star):
             return result
         return self._get_config("default_ask_text", "到点了~")
 
-    async def _send_message(self, task: Dict, text: str):
+    async def _send_reminder(self, task: Dict, text: str):
+        """主动发送提醒消息给用户"""
         session_id = task.get("session_id", "")
-        logger.info(f"[SmartReminder] 发送提醒 -> session={session_id} 内容={text}")
-        try:
-            if hasattr(self.context, "send_message"):
-                await self.context.send_message(session_id, text)
-            else:
-                logger.error("[SmartReminder] context 没有 send_message 方法")
-        except Exception as e:
-            logger.error(f"[SmartReminder] 发送消息失败: {e}")
+        logger.info(f"[SmartReminder] 发送提醒 session={session_id} 内容={text}")
+
+        # 优先使用保存的事件来发送
+        event = self.session_events.get(session_id)
+        if event:
+            try:
+                from astrbot.core.message.components import Plain
+                from astrbot.core.star.star_tools import StarTools
+
+                # 使用原始事件的完整 session_id 格式
+                full_session = event.session_id
+                new_message = await StarTools.create_message(
+                    type=str(event.message_obj.type.value),
+                    self_id=event.get_self_id(),
+                    session_id=full_session,
+                    sender=event.message_obj.sender,
+                    message=[Plain(text)],
+                    message_str=text,
+                    group_id=event.get_group_id() or ""
+                )
+                await StarTools.create_event(
+                    abm=new_message,
+                    platform=event.get_platform_name(),
+                    is_wake=True
+                )
+                logger.info(f"[SmartReminder] 已通过 StarTools 发送提醒")
+                return
+            except Exception as e:
+                logger.error(f"[SmartReminder] StarTools 发送失败: {e}")
+
+        # 兜底：记录到日志
+        logger.info(f"[SmartReminder] 无法发送消息，无可用事件 session: {session_id}")
 
     async def _wait_for_user_reply(self, task_id: str, retry_count: int):
         interval_min = self._get_config("re_remind_interval_min", 60)
@@ -345,7 +422,7 @@ class SmartReminder(Star):
         if not task:
             return
         if task.get("waiting_for_reply"):
-            logger.info(f"[SmartReminder] 超时未回复，进入重复提醒, 任务={task_id}")
+            logger.info(f"[SmartReminder] 超时未回复，再次提醒, 任务={task_id}")
             task["waiting_for_reply"] = False
             await self._save_tasks()
             await self._on_task_trigger(task_id)
@@ -357,9 +434,6 @@ class SmartReminder(Star):
             if t.get("id") == task_id:
                 return t
         return None
-
-    def _find_tasks_by_session(self, session_id: str) -> List[Dict]:
-        return [t for t in self.tasks if t.get("session_id") == session_id and not t.get("cancelled")]
 
     async def _remove_task(self, task_id: str):
         if task_id in self.scheduled_tasks:
@@ -381,9 +455,9 @@ class SmartReminder(Star):
             return None
 
         max_tasks = self._get_config("max_tasks", 20)
-        active_count = sum(1 for t in self.tasks if not t.get("completed", False) and not t.get("cancelled", False))
+        active_count = sum(1 for t in self.tasks if not t.get("completed") and not t.get("cancelled"))
         if active_count >= max_tasks:
-            logger.warning(f"[SmartReminder] 任务数已达上限 ({max_tasks})，拒绝创建")
+            logger.warning(f"[SmartReminder] 任务数已达上限 ({max_tasks})")
             return None
 
         try:
@@ -394,28 +468,31 @@ class SmartReminder(Star):
 
         text = task_info.get("context", "")
         keyword_type = self._classify_keywords(text)
-
         adjusted_time = self._get_adjusted_trigger_time(base_time, keyword_type)
 
         delta = (adjusted_time - base_time).total_seconds()
-        if delta < 0:
+        if delta < -10:
             trigger_type = "提前提醒"
-        elif delta > 0:
+        elif delta > 10:
             trigger_type = "推迟提醒"
         else:
             trigger_type = "准时提醒"
 
         task_id = str(uuid.uuid4())[:8]
         session_id = ""
+        full_session = ""
         if event:
             try:
-                session_id = str(event.get_session_id())
+                full_session = event.session_id  # 完整格式如 "FriendMessage:2320504270"
+                session_id = str(event.get_session_id())  # 简写如 "2320504270"
             except Exception:
                 pass
+            # 保存会话事件用于主动发送
+            self.session_events[session_id] = event
+            self.session_events[full_session] = event
 
-        first_ask_text = None
-        if self._get_config("use_llm_ask", True) and self._is_api_configured():
-            first_ask_text = await self._generate_first_ask_text(task_info.get("event", ""), keyword_type)
+        # 生成首次提醒文案
+        first_ask_text = await self._generate_first_ask_text(task_info.get("event", ""), keyword_type)
         if not first_ask_text:
             first_ask_text = self._get_config("default_ask_text", "到点了~")
 
@@ -443,16 +520,15 @@ class SmartReminder(Star):
         delay = (adjusted_time - datetime.now()).total_seconds()
         if delay <= 0:
             delay = 1
-        logger.info(f"[SmartReminder] 创建任务: {task_id} 事件={task['event']} 时间={task['time']} "
+        logger.info(f"[SmartReminder] 创建任务: {task_id} 事件={task['event']} "
                     f"类型={keyword_type} 触发类型={trigger_type} 剩余{delay:.0f}秒")
         coro = self._scheduled_trigger(task_id, delay)
         self.scheduled_tasks[task_id] = asyncio.ensure_future(coro)
         return task
 
-    async def _generate_first_ask_text(self, event: str, keyword_type: str) -> Optional[str]:
+    async def _generate_first_ask_text(self, event_name: str, keyword_type: str) -> Optional[str]:
         prompt = (
-            f"你是一个亲切的朋友。"
-            f"用户设置了一个提醒：{event}。"
+            f"你是一个亲切的朋友。用户设置了一个提醒：{event_name}。"
             f"请生成一句简短的提醒文案，用于在到点时发送给用户。"
             f"要求：自然、亲切、30字以内。只返回文案本身。"
         )
@@ -461,30 +537,42 @@ class SmartReminder(Star):
             logger.info(f"[SmartReminder] 首次提醒文案: {result}")
         return result
 
-    # ==================== LLM Response Analysis ====================
+    # ==================== Conversation Analysis ====================
 
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, resp: LLMResponse):
         if not self.enabled:
             return
         await self._ensure_loaded()
-        await self._analyze_and_create_task(event)
 
-    async def _analyze_and_create_task(self, event: AstrMessageEvent):
+        # 保存会话事件用于后续主动发送
+        try:
+            full_session = event.session_id
+            simple_session = str(event.get_session_id())
+            self.session_events[simple_session] = event
+            self.session_events[full_session] = event
+        except Exception:
+            pass
+
+        # 获取用户原始消息
+        user_message = event.message_str.strip() if event.message_str else ""
+        if not user_message or len(user_message) < 3:
+            return
+
+        await self._analyze_and_create_task(user_message, event)
+
+    async def _analyze_and_create_task(self, user_text: str, event: AstrMessageEvent):
         if not self._is_api_configured():
             return
-        try:
-            user_text = event.get_message_str() or ""
-        except Exception:
-            user_text = ""
-        if not user_text or len(user_text.strip()) < 3:
-            return
 
-        await self._auto_cancel_from_context(user_text)
+        # 先检查是否在取消任务（如果启用了自动取消）
+        if self._get_config("enable_auto_cancel", True):
+            await self._auto_cancel_from_context(user_text)
 
+        # 再检查是否需要创建任务
         prompt_template = self._get_config("prompt_template", "")
         if not prompt_template:
-            return
+            prompt_template = DEFAULT_PROMPT_TEMPLATE
 
         now = datetime.now()
         time_hint = f"当前时间是 {now.strftime('%Y-%m-%d %H:%M')}，请注意推断时间时参考当前日期。"
@@ -511,11 +599,14 @@ class SmartReminder(Star):
             return
 
         prompt_template = self._get_config("prompt_template_cancel", "")
-        if not prompt_template or not self._is_api_configured():
+        if not prompt_template:
+            prompt_template = DEFAULT_CANCEL_TEMPLATE
+        if not self._is_api_configured():
             return
 
         tasks_summary = json.dumps([
-            {"task_id": t["id"], "event": t["event"], "time": t.get("original_time", t["time"]), "context": t.get("context", "")}
+            {"task_id": t["id"], "event": t["event"],
+             "time": t.get("original_time", t["time"]), "context": t.get("context", "")}
             for t in active_tasks
         ], ensure_ascii=False, indent=2)
 
@@ -546,10 +637,17 @@ class SmartReminder(Star):
         if not self.enabled:
             return
         await self._ensure_loaded()
+
+        # 保存会话事件
         try:
-            session_id = str(event.get_session_id())
+            full_session = event.session_id
+            simple_session = str(event.get_session_id())
+            self.session_events[simple_session] = event
+            self.session_events[full_session] = event
         except Exception:
             return
+
+        # 检查是否有任务在等待该会话的回复
         for task in self.tasks:
             if task.get("session_id") == session_id and task.get("waiting_for_reply"):
                 logger.info(f"[SmartReminder] 检测到用户回复, session={session_id}, 任务={task['id']}")
@@ -569,11 +667,8 @@ class SmartReminder(Star):
             return
         await self._ensure_loaded()
 
-        try:
-            msg = event.get_message_str() or ""
-        except Exception:
-            msg = ""
-        parts = msg.strip().split()
+        msg = event.message_str.strip()
+        parts = msg.split()
         sub_cmd = parts[1] if len(parts) > 1 else ""
 
         session_id = ""
@@ -589,42 +684,37 @@ class SmartReminder(Star):
         elif sub_cmd == "clear":
             await self._cmd_clear(event, session_id)
         else:
-            await self._send_cmd_help(event)
-
-    async def _send_cmd_help(self, event: AstrMessageEvent):
-        help_text = (
-            "[SmartReminder] 指令帮助:\n"
-            "/remind list — 查看所有待执行的定时任务\n"
-            "/remind cancel <任务ID> — 取消指定任务\n"
-            "/remind clear — 清空所有任务"
-        )
-        await self._send_message_to_event(event, help_text)
+            help_text = (
+                "[SmartReminder] 指令帮助:\n"
+                "/remind list - 查看所有待执行的任务\n"
+                "/remind cancel <任务ID> - 取消指定任务\n"
+                "/remind clear - 清空所有任务"
+            )
+            await event.send(help_text)
 
     async def _cmd_list(self, event: AstrMessageEvent, session_id: str = ""):
         active = [t for t in self.tasks if not t.get("completed") and not t.get("cancelled")]
         if not active:
-            await self._send_message_to_event(event, "[SmartReminder] 当前没有待执行的任务")
+            await event.send("[SmartReminder] 当前没有待执行的任务")
             return
 
         lines = ["[SmartReminder] 当前任务列表:"]
         for t in active:
             icon = "⭐" if t.get("is_important") else "📌"
-            status = ""
-            if t.get("waiting_for_reply"):
-                status = " [等待回复]"
+            status = " [等待回复]" if t.get("waiting_for_reply") else ""
             lines.append(
                 f"  {icon} ID:{t['id']} | {t.get('event','')} | {t.get('time','')} | "
                 f"类型:{t.get('keyword_type','normal')} | 重试:{t.get('retry_count',0)}{status}"
             )
-        await self._send_message_to_event(event, "\n".join(lines))
+        await event.send("\n".join(lines))
 
     async def _cmd_cancel(self, event: AstrMessageEvent, task_id: str):
         task = self._find_task(task_id)
         if not task:
-            await self._send_message_to_event(event, f"[SmartReminder] 未找到任务 {task_id}")
+            await event.send(f"[SmartReminder] 未找到任务 {task_id}")
             return
         await self._remove_task(task_id)
-        await self._send_message_to_event(event, f"[SmartReminder] 已取消任务 {task_id}: {task.get('event','')}")
+        await event.send(f"[SmartReminder] 已取消任务 {task_id}: {task.get('event','')}")
 
     async def _cmd_clear(self, event: AstrMessageEvent, session_id: str = ""):
         count = 0
@@ -632,32 +722,17 @@ class SmartReminder(Star):
             if not task.get("completed") and not task.get("cancelled"):
                 await self._remove_task(task["id"])
                 count += 1
-        await self._send_message_to_event(event, f"[SmartReminder] 已清空 {count} 个任务")
-
-    async def _send_message_to_event(self, event: AstrMessageEvent, text: str):
-        try:
-            if hasattr(event, "send"):
-                await event.send(text)
-            elif hasattr(self.context, "send_message"):
-                session_id = ""
-                try:
-                    session_id = str(event.get_session_id())
-                except Exception:
-                    pass
-                await self.context.send_message(session_id, text)
-            else:
-                logger.info(f"[SmartReminder] 无法发送消息: {text}")
-        except Exception as e:
-            logger.error(f"[SmartReminder] 发送消息失败: {e}")
+        await event.send(f"[SmartReminder] 已清空 {count} 个任务")
 
     # ==================== Lifecycle ====================
 
     async def terminate(self):
-        for task_id, task in self.scheduled_tasks.items():
+        for task in self.scheduled_tasks.values():
             task.cancel()
-        for task_id, task in self.re_remind_tasks.items():
+        for task in self.re_remind_tasks.values():
             task.cancel()
         if self._http_client:
             await self._http_client.aclose()
             self._http_client = None
+        self.session_events.clear()
         logger.info("[SmartReminder] 插件已终止")

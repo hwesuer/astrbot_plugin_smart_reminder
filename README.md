@@ -44,33 +44,33 @@ LLM 回复 → on_llm_response
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `enabled` | bool | true | 是否启用插件 |
-| `api_base` | string | "" | LLM API 地址（必填，未配置则插件降级禁用） |
-| `api_key` | string | "" | LLM API 密钥 |
-| `model` | string | "" | LLM 模型名 |
-| `enable_jitter` | bool | true | 是否启用时间摆动 |
-| `jitter_range_seconds` | int | 120 | 时间摆动范围（秒） |
-| `enable_forgetting` | bool | false | 是否启用延迟遗忘 |
-| `forget_probability` | int | 15 | 延迟遗忘概率（%） |
-| `forget_max_delay` | int | 600 | 延迟遗忘最大延迟（秒） |
-| `early_remind_probability` | int | 5 | 提前提醒概率（%） |
-| `early_remind_max_seconds` | int | 300 | 提前提醒最大提前量（秒） |
-| `enable_complete_forget` | bool | false | 是否启用完全遗忘 |
-| `complete_forget_probability` | int | 5 | 完全遗忘概率（%） |
-| `precise_keywords` | list | ["千万要","别忘了","一定要","务必"] | 准时触发关键词 |
-| `casual_keywords` | list | ["大概","差不多","随便","随意"] | 随意关键词 |
-| `casual_keyword_boost` | int | 25 | 随意关键词概率增幅（0~50） |
-| `enable_re_remind` | bool | true | 是否启用重复提醒 |
-| `re_remind_interval_min` | int | 60 | 重复提醒最小间隔（秒） |
-| `re_remind_interval_max` | int | 600 | 重复提醒最大间隔（秒） |
-| `re_remind_max_count` | int | 3 | 最大重复提醒次数（实际±1随机） |
-| `max_tasks` | int | 20 | 最大任务数 |
-| `task_expire_days` | int | 7 | 任务过期自动清理天数 |
-| `use_llm_ask` | bool | true | 触发时是否调用 LLM 生成询问文案 |
-| `default_ask_text` | string | "到点了~" | 默认提醒文案 |
-| `ask_style_template` | text | (见默认值) | 重复提醒文案风格模板 |
-| `prompt_template` | text | (见默认值) | 时间解析提示词模板 |
-| `prompt_template_cancel` | text | (见默认值) | 取消分析提示词模板 |
+| `enabled` | bool | `true` | 是否启用插件。关闭后插件不进行任何分析、创建和提醒操作。 |
+| `api_base` | string | `""` | LLM API 地址，必填。未配置时插件自动降级为禁用。兼容 OpenAI 接口格式，如 `https://api.deepseek.com`。 |
+| `api_key` | string | `""` | LLM API 密钥。 |
+| `model` | string | `""` | LLM 模型名，如 `deepseek-chat`。 |
+| `enable_jitter` | bool | `true` | 是否启用时间摆动。开启后提醒时间会在设定时间前后随机偏移，让提醒更像真人。 |
+| `jitter_range_seconds` | int | `120` | 时间摆动范围（秒）。提醒时间会在设定时间的 ± 该值范围内随机偏移。设为 0 则关闭摆动。 |
+| `enable_forgetting` | bool | `false` | 是否启用延迟遗忘。开启后到点时有概率延迟一段时间再提醒，模拟「差点忘了」的效果。 |
+| `forget_probability` | int | `15` | 延迟遗忘概率（%）。到点时有一定概率延迟提醒。含随意关键词的任务此概率会增加。 |
+| `forget_max_delay` | int | `600` | 延迟遗忘最大延迟（秒）。延迟时间在此范围内随机。 |
+| `early_remind_probability` | int | `5` | 提前提醒概率（%）。有一定概率在设定时间之前提前提醒，模拟「提前想起来了」的效果。 |
+| `early_remind_max_seconds` | int | `300` | 提前提醒最大提前量（秒）。提前时间在此范围内随机。 |
+| `enable_complete_forget` | bool | `false` | 是否启用完全遗忘。开启后非准时类任务到点时有概率直接删除不触发，模拟「真的忘了」。准时类任务不受影响。 |
+| `complete_forget_probability` | int | `5` | 完全遗忘概率（%）。到点后直接遗忘不提醒的概率。含随意关键词的任务此概率会增加。 |
+| `precise_keywords` | list | `["千万要","别忘了","一定要","务必"]` | 准时触发关键词。包含这些关键词的任务无视完全遗忘、时间摆动和延迟遗忘，准时提醒。可自定义。 |
+| `casual_keywords` | list | `["大概","差不多","随便","随意"]` | 随意关键词。包含这些关键词的任务，遗忘和摆动概率会在原基础上增加 `casual_keyword_boost` 的百分比。 |
+| `casual_keyword_boost` | int | `25` | 含随意关键词时遗忘/摆动概率增加百分比（0~50）。例如原本遗忘概率 15%，含随意关键词后变为 40%。 |
+| `enable_re_remind` | bool | `true` | 是否启用重复提醒。用户收到提醒后未回复时，自动隔一段时间再次提醒。 |
+| `re_remind_interval_min` | int | `60` | 重复提醒最小间隔（秒）。每次重复提醒的等待时间在此值和最大值之间随机，模拟人的记忆规律。 |
+| `re_remind_interval_max` | int | `600` | 重复提醒最大间隔（秒）。默认 60~600 秒（1~10 分钟）之间随机。 |
+| `re_remind_max_count` | int | `3` | 最大重复提醒次数。实际次数会有 ±1 的随机摆动（即 2~4 次）。准时类任务次数会比普通任务多。 |
+| `max_tasks` | int | `20` | 最大任务数。超过上限后拒绝创建新任务，防止资源占用过多。 |
+| `task_expire_days` | int | `7` | 任务过期自动清理天数。已完成或取消的任务超过此天数后自动删除。 |
+| `use_llm_ask` | bool | `true` | 触发时是否调用 LLM 生成询问文案。关闭时使用 `default_ask_text` 作为文案，节省 token。 |
+| `default_ask_text` | string | `"到点了~"` | 第一次提醒的默认文案。当 `use_llm_ask` 为 false 或 LLM 调用失败时使用。 |
+| `ask_style_template` | text | (见说明) | 第二次及后续提醒的文案风格模板。用于引导 LLM 生成风格自然、贴合上下文的询问文案。支持 `{trigger_type}`、`{event}`、`{retry_count}` 三个变量。 |
+| `prompt_template` | text | (见说明) | 分析对话是否需要创建定时任务的提示词模板。用于引导 LLM 从对话中提取时间和事件信息。 |
+| `prompt_template_cancel` | text | (见说明) | 分析对话是否在取消任务的提示词模板。用于识别用户的取消意图并匹配对应任务。 |
 
 ## 安装
 

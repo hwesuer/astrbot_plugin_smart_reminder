@@ -7,17 +7,17 @@
   "api_base": {
     "type": "string",
     "default": "",
-    "description": "要调用的大语言模型 API 地址 (未配置则插件降级为禁用)"
+    "description": "LLM API 地址 (未配置则插件降级为禁用)"
   },
   "api_key": {
     "type": "string",
     "default": "",
-    "description": "要调用的大语言模型 API 密钥"
+    "description": "LLM API 密钥"
   },
   "model": {
     "type": "string",
     "default": "",
-    "description": "要调用的大语言模型 模型名"
+    "description": "LLM 模型名"
   },
   "enable_jitter": {
     "type": "bool",
@@ -66,12 +66,22 @@
   },
   "precise_keywords": {
     "type": "list",
-    "default": ["千万要", "别忘了", "一定要", "务必"],
+    "default": [
+      "千万要",
+      "别忘了",
+      "一定要",
+      "务必"
+    ],
     "description": "准时触发关键词, 包含这些关键词的任务无视完全遗忘机制"
   },
   "casual_keywords": {
     "type": "list",
-    "default": ["大概", "差不多", "随便", "随意"],
+    "default": [
+      "大概",
+      "差不多",
+      "随便",
+      "随意"
+    ],
     "description": "随意关键词, 包含这些词的任务遗忘/摆动概率增加"
   },
   "casual_keyword_boost": {
@@ -133,5 +143,10 @@
     "type": "text",
     "default": "你是一个智能助手，正在分析用户是否在取消之前设定的提醒任务。\n用户之前设置了以下任务：\n{tasks}\n\n请判断用户当前的消息是否在取消其中某个任务。\n\n支持的表达方式：\n- 直接取消：「不用提醒了」「取消提醒」\n- 变更计划：「今天下午不去了」「改到明天了」\n- 已完成：「作业已经交了」「做完了」\n- 否定语气：「不用xxx了」「别提醒了」\n\n如果匹配到某个任务，返回 JSON：\n{\"should_cancel\": true, \"task_id\": \"匹配的任务ID\", \"reason\": \"取消原因\"}\n\n如果没有匹配，返回：\n{\"should_cancel\": false}\n\n请只返回 JSON，不要有其他内容。",
     "description": "分析对话是否在取消任务的提示词模板"
+  },
+  "enable_auto_cancel": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用自动取消任务 (从对话中检测取消意图并自动移除任务)"
   }
 }
