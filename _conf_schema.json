@@ -1,0 +1,137 @@
+{
+  "enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用插件"
+  },
+  "api_base": {
+    "type": "string",
+    "default": "",
+    "description": "LLM API 地址 (未配置则插件降级为禁用)"
+  },
+  "api_key": {
+    "type": "string",
+    "default": "",
+    "description": "LLM API 密钥"
+  },
+  "model": {
+    "type": "string",
+    "default": "",
+    "description": "LLM 模型名"
+  },
+  "enable_jitter": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用时间摆动"
+  },
+  "jitter_range_seconds": {
+    "type": "int",
+    "default": 120,
+    "description": "时间摆动范围(秒), 提醒时间会在设定时间前后随机偏移"
+  },
+  "enable_forgetting": {
+    "type": "bool",
+    "default": false,
+    "description": "是否启用延迟遗忘 (提醒时间到后延迟一段时间再触发)"
+  },
+  "forget_probability": {
+    "type": "int",
+    "default": 15,
+    "description": "延迟遗忘概率(%): 到点时有一定概率延迟提醒"
+  },
+  "forget_max_delay": {
+    "type": "int",
+    "default": 600,
+    "description": "延迟遗忘最大延迟(秒)"
+  },
+  "early_remind_probability": {
+    "type": "int",
+    "default": 5,
+    "description": "提前提醒概率(%): 有一定概率在设定时间之前触发提醒"
+  },
+  "early_remind_max_seconds": {
+    "type": "int",
+    "default": 300,
+    "description": "提前提醒最大提前量(秒)"
+  },
+  "enable_complete_forget": {
+    "type": "bool",
+    "default": false,
+    "description": "是否启用完全遗忘 (到点后直接删除任务不触发提醒, 重要提醒除外)"
+  },
+  "complete_forget_probability": {
+    "type": "int",
+    "default": 5,
+    "description": "完全遗忘概率(%): 到点后直接遗忘提醒的概率"
+  },
+  "precise_keywords": {
+    "type": "list",
+    "default": ["千万要", "别忘了", "一定要", "务必"],
+    "description": "准时触发关键词, 包含这些关键词的任务无视完全遗忘机制"
+  },
+  "casual_keywords": {
+    "type": "list",
+    "default": ["大概", "差不多", "随便", "随意"],
+    "description": "随意关键词, 包含这些词的任务遗忘/摆动概率增加"
+  },
+  "casual_keyword_boost": {
+    "type": "int",
+    "default": 25,
+    "description": "含随意关键词时遗忘/摆动概率增加百分比 (0~50)"
+  },
+  "enable_re_remind": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用重复提醒 (用户未回复时再次提醒)"
+  },
+  "re_remind_interval_min": {
+    "type": "int",
+    "default": 60,
+    "description": "重复提醒最小间隔(秒)"
+  },
+  "re_remind_interval_max": {
+    "type": "int",
+    "default": 600,
+    "description": "重复提醒最大间隔(秒), 每次提醒间隔在此范围内随机摆动"
+  },
+  "re_remind_max_count": {
+    "type": "int",
+    "default": 3,
+    "description": "最大重复提醒次数 (实际次数会有 ±1 的随机摆动)"
+  },
+  "max_tasks": {
+    "type": "int",
+    "default": 20,
+    "description": "最大任务数, 超过后拒绝创建新任务"
+  },
+  "task_expire_days": {
+    "type": "int",
+    "default": 7,
+    "description": "任务过期自动清理天数"
+  },
+  "use_llm_ask": {
+    "type": "bool",
+    "default": true,
+    "description": "触发时是否调用 LLM 生成询问文案 (否则使用 default_ask_text)"
+  },
+  "default_ask_text": {
+    "type": "string",
+    "default": "到点了~",
+    "description": "第一次提醒的默认文案 (use_llm_ask 为 false 时使用)"
+  },
+  "ask_style_template": {
+    "type": "text",
+    "default": "你是一个亲切的朋友，正在提醒用户做某件事。\n请根据以下信息生成一句简短的提醒，语气自然、贴近生活。\n\n触发类型：{trigger_type}（准时提醒/提前提醒/推迟提醒）\n事件：{event}\n这是第 {retry_count} 次提醒，前几次用户没有回复。\n\n风格要求：\n- 第一次提醒可以直接说事\n- 后续提醒可以带一点催促或关切的语气\n- 不要过于正式或生硬\n- 每次生成的文案要有变化，不要重复\n- 控制在 30 字以内\n\n示例风格：\n- 准时提醒：「到点了，该去{event}了~」\n- 提前提醒：「快到了，准备一下{event}吧」\n- 推迟提醒：「是不是忘了{event}了...」\n\n请只返回提醒文案本身，不需要引号。",
+    "description": "第二次及后续提醒的文案风格模板，用于引导 LLM 生成风格相似的询问文案"
+  },
+  "prompt_template": {
+    "type": "text",
+    "default": "你是一个智能助手，正在分析用户和 AI 的对话。\n请判断用户是否提到了需要定时提醒的事情。\n\n判断标准：\n- 用户明确提到了一个时间点（如\"晚上八点\"、\"明早九点\"、\"下周三\"等）\n- 用户提到了需要做某件事（如\"上课\"、\"交作业\"、\"开会\"、\"吃饭\"等）\n- 用户语气是告知、安排或请求提醒，而非单纯的陈述\n\n如果满足以上条件，返回 JSON：\n{\"should_remind\": true, \"time\": \"具体时间\", \"event\": \"事件\", \"context\": \"原文上下文\", \"is_important\": false}\n\n如果不满足，返回：\n{\"should_remind\": false}\n\n注意：\n- is_important 根据用户是否使用强调语气（如\"千万要\"、\"别忘了\"）来判断\n- 时间格式统一为 \"2026-04-29 20:00\" 这样的 ISO 格式\n- 如果时间表述模糊（如\"下午\"），尽可能推断为合理时间\n- 请只返回 JSON，不要有其他内容",
+    "description": "分析对话是否需要创建定时任务的提示词模板"
+  },
+  "prompt_template_cancel": {
+    "type": "text",
+    "default": "你是一个智能助手，正在分析用户是否在取消之前设定的提醒任务。\n用户之前设置了以下任务：\n{tasks}\n\n请判断用户当前的消息是否在取消其中某个任务。\n\n支持的表达方式：\n- 直接取消：「不用提醒了」「取消提醒」\n- 变更计划：「今天下午不去了」「改到明天了」\n- 已完成：「作业已经交了」「做完了」\n- 否定语气：「不用xxx了」「别提醒了」\n\n如果匹配到某个任务，返回 JSON：\n{\"should_cancel\": true, \"task_id\": \"匹配的任务ID\", \"reason\": \"取消原因\"}\n\n如果没有匹配，返回：\n{\"should_cancel\": false}\n\n请只返回 JSON，不要有其他内容。",
+    "description": "分析对话是否在取消任务的提示词模板"
+  }
+}
