@@ -7,17 +7,17 @@
   "api_base": {
     "type": "string",
     "default": "",
-    "description": "LLM API 地址 (未配置则插件降级为禁用)"
+    "description": "要调用的大语言模型 API 地址 (未配置则插件降级为禁用)"
   },
   "api_key": {
     "type": "string",
     "default": "",
-    "description": "LLM API 密钥"
+    "description": "要调用的大语言模型 API 密钥"
   },
   "model": {
     "type": "string",
     "default": "",
-    "description": "LLM 模型名"
+    "description": "要调用的大语言模型 模型名"
   },
   "enable_jitter": {
     "type": "bool",
