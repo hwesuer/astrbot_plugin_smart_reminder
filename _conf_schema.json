@@ -153,5 +153,15 @@
     "type": "bool",
     "default": true,
     "description": "启动时是否自动恢复未完成的任务 (关闭后插件启动时不加载已有任务)"
+  },
+  "use_first_reminder_ai": {
+    "type": "bool",
+    "default": false,
+    "description": "首次提醒时是否调用 AI 生成提示词（发给 LLM 让其转发消息到用户，使用主 API 配置）"
+  },
+  "first_reminder_prompt_template": {
+    "type": "text",
+    "default": "请用纯文本、自然语言的形式生成一句提醒内容。\n不要使用任何函数调用、指令或代码格式。\n只需要输出给用户看的最终消息，不要输出其他内容。\n事件：{event}",
+    "description": "首次提醒时，调用 LLM 生成提醒文案的提示词。必须要求 LLM 输出纯文本自然语言。可用变量：{event}"
   }
 }

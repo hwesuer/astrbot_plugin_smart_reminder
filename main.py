@@ -6,12 +6,19 @@ import os
 import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+import logging
 
 import httpx
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.provider import LLMResponse
 from astrbot.api.star import Context, Star, register
+
+# 导入 SmartDebounce 的全局跳过列表（可选依赖）
+try:
+    from astrbot_plugin_smart_debounce.main import global_skip_ids as debounce_skip_ids
+except ImportError:
+    debounce_skip_ids = None
 
 
 # 默认提示词预设
@@ -61,13 +68,32 @@ DEFAULT_ASK_STYLE_TEMPLATE = (
     "- 每次生成的文案要有变化，不要重复\n"
     "- 控制在 30 字以内\n\n"
     "示例风格：\n"
-    '- 准时提醒："到点了，该去{event}了~"\n'
-    '- 提前提醒："快到了，准备一下{event}吧"\n'
+    '- 准时提醒："啊，到点了，该去{event}了~"\n'
+    '- 提前提醒："快到时间了，准备一下{event}吧"\n'
     '- 推迟提醒："是不是忘了{event}了..."'
 )
 
 
 @register("astrbot_plugin_smart_reminder", "插件作者", "智能定时提醒插件 - 实时分析对话并自动创建定时任务", "1.0.0")
+def _init_plugin_logger() -> logging.Logger:
+    """初始化插件专用日志，写入 logs/smart_reminder.log"""
+    try:
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        log_dir = os.path.join(plugin_dir, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "smart_reminder.log")
+        handler = logging.FileHandler(log_path, encoding="utf-8", mode="a")
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger = logging.getLogger("SmartReminderFileLog")
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        logger.info("=== SmartReminder 日志已启动 ===")
+        return logger
+    except Exception as e:
+        print(f"[SmartReminder] 日志初始化失败: {e}")
+        return None
+
 class SmartReminder(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -82,6 +108,9 @@ class SmartReminder(Star):
         self.data_file = os.path.join(self.data_dir, "astrbot_plugin_smart_reminder_data.json")
         self._http_client: Optional[httpx.AsyncClient] = None
         self._loaded = False
+        self.plugin_logger = _init_plugin_logger()
+
+    # ==================== 初始化与配置读取 ====================
 
     async def _ensure_loaded(self):
         if not self._loaded:
@@ -114,6 +143,8 @@ class SmartReminder(Star):
 
     def _is_api_configured(self) -> bool:
         return bool(self.api_base and self.api_key and self.model)
+
+    # ==================== LLM API 调用 ====================
 
     async def _get_http_client(self) -> httpx.AsyncClient:
         if self._http_client is None:
@@ -174,6 +205,8 @@ class SmartReminder(Star):
                 pass
         return {}
 
+    # ==================== 关键词分类 ====================
+
     def _classify_keywords(self, text: str) -> str:
         precise_keywords = self._get_config("precise_keywords", ["千万要", "别忘了", "一定要", "务必"])
         casual_keywords = self._get_config("casual_keywords", ["大概", "差不多", "随便", "随意"])
@@ -186,6 +219,8 @@ class SmartReminder(Star):
         return "normal"
 
     # ==================== Task Persistence ====================
+
+    # ==================== 任务持久化（存/读） ====================
 
     async def _load_tasks(self):
         if not self._get_config("restore_tasks_on_startup", True):
@@ -226,6 +261,8 @@ class SmartReminder(Star):
         ]
 
     # ==================== Scheduling ====================
+
+    # ==================== 任务调度与时间计算 ====================
 
     def _schedule_existing_task(self, task: Dict):
         task_id = task["id"]
@@ -289,6 +326,8 @@ class SmartReminder(Star):
 
     # ==================== Trigger Logic ====================
 
+    # ==================== 定时任务触发逻辑 ====================
+
     async def _on_task_trigger(self, task_id: str):
         task = self._find_task(task_id)
         if not task:
@@ -298,6 +337,7 @@ class SmartReminder(Star):
             return
 
         logger.info(f"[SmartReminder] ===== 任务触发: {task_id} 事件: {task.get('event')} =====")
+        self.plugin_logger.info(f"[任务触发] task_id={task_id} event={task.get('event')} time={task.get('time')}")
 
         keyword_type = task.get("keyword_type", "normal")
         enable_complete_forget = self._get_config("enable_complete_forget", False)
@@ -320,8 +360,14 @@ class SmartReminder(Star):
         retry_count = task.get("retry_count", 0)
 
         if retry_count == 0:
-            # 第一次提醒：用创建时生成的文案
-            ask_text = task.get("first_ask_text") or self._get_config("default_ask_text", "到点了~")
+            # 第一次提醒
+            use_special = self._get_config("use_first_reminder_ai", False)
+            if use_special:
+                # 用单独配置的 AI 生成提示词（让 LLM 转发消息给用户）
+                ask_text = await self._generate_first_reminder_text(task)
+            else:
+                # 原来的方式：用创建时生成的文案或默认文案
+                ask_text = task.get("first_ask_text") or self._get_config("default_ask_text", "到点了~")
         else:
             # 后续提醒：用 LLM 重新生成
             ask_text = await self._generate_ask_text(task, retry_count)
@@ -376,23 +422,109 @@ class SmartReminder(Star):
             return result
         return self._get_config("default_ask_text", "到点了~")
 
+    async def _generate_first_reminder_text(self, task: Dict) -> str:
+        """首次提醒时，用主 API 配置生成提示词，让 LLM 转发消息给用户"""
+        if not self._is_api_configured():
+            return task.get("first_ask_text") or self._get_config("default_ask_text", "到点了~")
+
+        template = str(self._get_config("first_reminder_prompt_template", ""))
+        if not template:
+            return task.get("first_ask_text") or self._get_config("default_ask_text", "到点了~")
+
+        # 读取 AstrBot 人格设定作为系统提示词
+        persona_prompt = self._get_astrbot_persona()
+
+        event = task.get("event", "")
+        text = task.get("first_ask_text") or "到点了"
+        prompt = template.replace("{event}", event).replace("{text}", text)
+
+        result = await self._call_llm(
+            persona_prompt,
+            prompt,
+            temperature=0.7
+        )
+        if result:
+            # 清洗 LLM 输出，过滤函数调用格式
+            cleaned = self._clean_llm_output(result)
+            logger.info(f"[SmartReminder] 首次提醒 AI 生成(原始): {result}")
+            logger.info(f"[SmartReminder] 首次提醒 AI 生成(清洗后): {cleaned}")
+            return cleaned
+        return task.get("first_ask_text") or self._get_config("default_ask_text", "到点了~")
+
+    def _clean_llm_output(self, text: str) -> str:
+        """清洗 LLM 输出，过滤掉可能的函数调用外壳"""
+        import re
+        # 匹配 send_message_to_user("xxx") 或 send_message_to_user('xxx')
+        m = re.search(r'send_message_to_user\([\'"](.+?)[\'"]\)', text)
+        if m:
+            return m.group(1)
+        # 匹配其他函数调用格式，如 func_name("xxx")
+        m = re.search(r'\w+\([\'"](.+?)[\'"]\)', text)
+        if m:
+            return m.group(1)
+        return text
+
+    def _get_astrbot_persona(self) -> str:
+        """读取 AstrBot 的人格设定（支持 UTF-8 BOM）"""
+        try:
+            import json, os
+            config_path = os.path.join(os.getcwd(), "data", "cmd_config.json")
+            if os.path.exists(config_path):
+                # 先用 utf-8-sig（自动跳过 BOM）读取
+                with open(config_path, "r", encoding="utf-8-sig") as f:
+                    config = json.load(f)
+                pool = config.get("persona_pool", [])
+                if pool and len(pool) > 0:
+                    prompt = pool[0].get("prompt", "")
+                    if prompt:
+                        logger.info(f"[SmartReminder] 已加载人格设定")
+                        return prompt
+        except Exception as e:
+            logger.error(f"[SmartReminder] 读取人格设定失败: {e}")
+        # 默认系统提示词
+        return "你是一个定时提醒助手。请根据用户要求生成提醒内容。"
+
+    async def _call_llm_with_config(self, system_prompt: str, user_content: str,
+                                     api_base: str, api_key: str, model: str,
+                                     temperature: float = 0.7) -> Optional[str]:
+        """用指定的 API 配置调用 LLM"""
+        if not api_base or not api_key or not model:
+            return None
+        client = await self._get_http_client()
+        url = api_base.rstrip("/") + "/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            "temperature": temperature
+        }
+        try:
+            logger.info(f"[SmartReminder] 调用首次提醒 AI: {url}")
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code != 200:
+                logger.error(f"[SmartReminder] 首次提醒 AI 返回错误: {resp.status_code}")
+                return None
+            data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return content.strip()
+        except Exception as e:
+            logger.error(f"[SmartReminder] 首次提醒 AI 调用异常: {e}")
+            return None
+
+    # ==================== 发送提醒消息 ====================
     async def _send_reminder(self, task: Dict, text: str):
-        """主动发送提醒消息给用户"""
+        """主动发送提醒消息给用户（使用 StarTools，绕过 SmartDebounce）"""
         session_id = task.get("session_id", "")
         logger.info(f"[SmartReminder] 发送提醒 session={session_id} 内容={text}")
+        self.plugin_logger.info(f"[发送提醒] session={session_id} 内容={text}")
 
-        # 使用保存的事件直接发送，不走 StarTools 事件管道
-        # 这样可以绕过 SmartDebounce 等插件的拦截
         event = self.session_events.get(session_id)
-        if event:
-            try:
-                await event.send(text)
-                logger.info(f"[SmartReminder] 已通过 event.send 发送提醒")
-                return
-            except Exception as e:
-                logger.error(f"[SmartReminder] event.send 发送失败: {e}")
-
-        # 如果在 session_events 中没找到，尝试使用 StarTools 兜底
         if event:
             try:
                 from astrbot.core.message.components import Plain
@@ -407,18 +539,21 @@ class SmartReminder(Star):
                     message_str=text,
                     group_id=event.get_group_id() or ""
                 )
+                if debounce_skip_ids is not None:
+                    debounce_skip_ids.add(new_message.message_id)
                 await StarTools.create_event(
                     abm=new_message,
                     platform=event.get_platform_name(),
                     is_wake=True
                 )
-                logger.info(f"[SmartReminder] 已通过 StarTools 发送提醒")
+                logger.info(f"[SmartReminder] 已通过 StarTools 发送提醒（跳过 SmartDebounce）")
                 return
             except Exception as e:
-                logger.error(f"[SmartReminder] StarTools 发送失败: {e}")
+                logger.error(f"[SmartReminder] 发送失败: {e}")
 
-        # 兜底：记录到日志
-        logger.info(f"[SmartReminder] 无法发送消息，无可用事件 session: {session_id}")
+        logger.error(f"[SmartReminder] 无法发送提醒：未找到会话 event，session={session_id}")
+
+    # ==================== 等待用户回复（重复提醒） ====================
 
     async def _wait_for_user_reply(self, task_id: str, retry_count: int):
         interval_min = self._get_config("re_remind_interval_min", 60)
@@ -440,6 +575,8 @@ class SmartReminder(Star):
             await self._on_task_trigger(task_id)
 
     # ==================== Task Management ====================
+
+    # ==================== 任务管理（增删改查） ====================
 
     def _find_task(self, task_id: str) -> Optional[Dict]:
         for t in self.tasks:
@@ -552,6 +689,8 @@ class SmartReminder(Star):
     # ==================== Conversation Analysis ====================
 
     @filter.on_llm_response()
+    # ==================== 对话分析（识别提醒需求） ====================
+
     async def on_llm_response(self, event: AstrMessageEvent, resp: LLMResponse):
         if not self.enabled:
             return
@@ -573,9 +712,27 @@ class SmartReminder(Star):
 
         await self._analyze_and_create_task(user_message, event)
 
+    def _preprocess_time_expressions(self, text: str) -> str:
+        import re
+        now = datetime.now()
+        def replace_minutes(m):
+            t = now + timedelta(minutes=int(m.group(1)))
+            return t.strftime("%H:%M")
+        def replace_hours(m):
+            t = now + timedelta(hours=int(m.group(1)))
+            return t.strftime("%H:%M")
+        text = re.sub(r'(\d+)\s*分钟\s*后', replace_minutes, text)
+        text = re.sub(r'(\d+)\s*小时\s*后', replace_hours, text)
+        text = re.sub(r'半\s*小时\s*后', lambda m: (now + timedelta(minutes=30)).strftime("%H:%M"), text)
+        text = re.sub(r'一\s*刻\s*钟\s*后', lambda m: (now + timedelta(minutes=15)).strftime("%H:%M"), text)
+        return text
+
     async def _analyze_and_create_task(self, user_text: str, event: AstrMessageEvent):
         if not self._is_api_configured():
             return
+
+        # 先预处理时间表达
+        user_text = self._preprocess_time_expressions(user_text)
 
         # 先检查是否在取消任务（如果启用了自动取消）
         if self._get_config("enable_auto_cancel", True):
@@ -588,6 +745,7 @@ class SmartReminder(Star):
 
         now = datetime.now()
         time_hint = f"当前时间是 {now.strftime('%Y-%m-%d %H:%M')}，请注意推断时间时参考当前日期。"
+        self.plugin_logger.info(f"[时间解析] 用户输入: {user_text}")
 
         result = await self._call_llm(
             "你是一个时间解析助手。请严格按照要求的 JSON 格式返回。",
@@ -598,12 +756,16 @@ class SmartReminder(Star):
             return
 
         parsed = self._parse_json_from_llm(result)
+        self.plugin_logger.info(f"[时间解析] LLM 返回: {parsed}")
         logger.info(f"[SmartReminder] LLM 分析结果: {parsed}")
 
         if parsed.get("should_remind"):
+            self.plugin_logger.info(f"[任务创建] 即将创建: {parsed.get('time')} - {parsed.get('event')}")
             await self._create_task(parsed, event)
 
     # ==================== Auto Cancel ====================
+
+    # ==================== 自动取消任务 ====================
 
     async def _auto_cancel_from_context(self, text: str):
         active_tasks = [t for t in self.tasks if not t.get("completed") and not t.get("cancelled")]
@@ -632,6 +794,7 @@ class SmartReminder(Star):
             return
 
         parsed = self._parse_json_from_llm(result)
+        self.plugin_logger.info(f"[时间解析] LLM 返回: {parsed}")
         logger.info(f"[SmartReminder] 取消分析结果: {parsed}")
 
         if parsed.get("should_cancel"):
@@ -645,6 +808,8 @@ class SmartReminder(Star):
     # ==================== User Reply Detection ====================
 
     @filter.on_llm_request()
+    # ==================== 检测用户回复（标记任务完成） ====================
+
     async def on_llm_request(self, event: AstrMessageEvent, req):
         if not self.enabled:
             return
@@ -674,6 +839,8 @@ class SmartReminder(Star):
     # ==================== Commands ====================
 
     @filter.command("remind")
+    # ==================== 指令处理（/remind） ====================
+
     async def remind(self, event: AstrMessageEvent):
         if not self.enabled:
             return
@@ -737,6 +904,8 @@ class SmartReminder(Star):
         await event.send(f"[SmartReminder] 已清空 {count} 个任务")
 
     # ==================== Lifecycle ====================
+
+    # ==================== 插件生命周期 ====================
 
     async def terminate(self):
         for task in self.scheduled_tasks.values():
