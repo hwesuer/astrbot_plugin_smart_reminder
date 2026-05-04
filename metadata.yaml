@@ -1,6 +1,6 @@
-id: astrbot_plugin_smart_reminder
 name: astrbot_plugin_smart_reminder
-description: 自动从对话中识别定时提醒，支持 LLM 解析、重复提醒、用户命令管理、StarTools 绕过拦截、重启恢复
-version: 1.0.2
+display_name: 清爽版智能定时提醒
+desc: 自动从对话中识别定时提醒，支持 LLM 解析、重复提醒、用户命令管理、StarTools 绕过拦截、重启恢复
+version: v1.0.2
 author: YourName
-license: MIT
+repo: https://github.com/YourName/astrbot_plugin_smart_reminder

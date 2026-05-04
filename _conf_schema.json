@@ -1,107 +1,102 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "SmartReminder Config",
-  "type": "object",
-  "properties": {
-    "enabled": {
-      "type": "boolean",
-      "default": true,
-      "description": "是否启用插件"
-    },
-    "api_base": {
-      "type": "string",
-      "default": "",
-      "description": "LLM API 地址（必填，未配置则插件不解析提醒）"
-    },
-    "api_key": {
-      "type": "string",
-      "default": "",
-      "description": "LLM API 密钥"
-    },
-    "model": {
-      "type": "string",
-      "default": "",
-      "description": "LLM 模型名，如 deepseek-chat"
-    },
-    "prompt_template": {
-      "type": "string",
-      "default": "你是一个严格的时间提醒解析助手。\n仅在用户明确要求设置/创建提醒时返回 should_remind:true。\n以下情况必须返回 should_remind=false：\n- 用户只是在讨论时间表、计划，而非请求提醒\n- 用户说\"不提醒\"\"不用了\"\"不需要\"等否定\n- 用户闲聊提到时间但未要求提醒\n仅在用户请求取消已有提醒时返回 should_cancel:true。\n当前已有任务：{tasks}\n当前时间：{time_hint}\n返回 JSON:\n新建：{\"should_remind\":true,\"time\":\"YYYY-MM-DD HH:MM\",\"event\":\"事件简述\",\"is_important\":false}\n取消：{\"should_cancel\":true,\"task_id\":\"匹配ID\",\"reason\":\"原因\"}\n无操作：{\"should_remind\":false,\"should_cancel\":false}\n只返回 JSON，无其他内容。",
-      "description": "分析用户消息是否需要创建/取消提醒的系统提示词。{tasks} 和 {time_hint} 会被替换为实际值。"
-    },
-    "enable_auto_cancel": {
-      "type": "boolean",
-      "default": true,
-      "description": "是否启用自动取消：从对话中检测取消意图并自动移除任务"
-    },
-    "use_llm_ask": {
-      "type": "boolean",
-      "default": true,
-      "description": "重复提醒时是否调用 LLM 生成文案"
-    },
-    "default_ask_text": {
-      "type": "string",
-      "default": "到点了~",
-      "description": "首次提醒的默认文案（use_first_reminder_ai 为 false 时使用）"
-    },
-    "use_first_reminder_ai": {
-      "type": "boolean",
-      "default": false,
-      "description": "首次提醒时是否调用 AI 生成文案"
-    },
-    "first_reminder_prompt_template": {
-      "type": "string",
-      "default": "请用纯文本、自然语言的形式生成一句提醒内容。不要使用任何函数调用、指令或代码格式。只要给用户看的最终消息。事件：{event}",
-      "description": "首次提醒时的 LLM 提示词（{event} 会被替换为事件描述）"
-    },
-    "ask_style_template": {
-      "type": "string",
-      "default": "你是一个亲切的朋友，正在提醒用户做某件事。请根据以下信息生成一句简短的提醒，语气自然、贴近生活。\n\n触发类型：{trigger_type}（准时提醒/重复提醒）\n事件：{event}\n这是第 {retry_count} 次提醒。\n\n风格要求：\n- 第一次提醒直接说事\n- 后续提醒可以带一点催促或关切的语气\n- 不要过于正式或生硬\n- 每次生成的文案要有变化\n- 控制在 30 字以内\n\n请只返回提醒文案本身，不需要引号。",
-      "description": "重复提醒时的文案风格模板（{event}、{retry_count}、{trigger_type} 会被替换）"
-    },
-    "enable_re_remind": {
-      "type": "boolean",
-      "default": true,
-      "description": "是否启用重复提醒（用户未回复时多次提醒）"
-    },
-    "re_remind_interval_min": {
-      "type": "integer",
-      "default": 60,
-      "description": "重复提醒最小间隔（秒）"
-    },
-    "re_remind_interval_max": {
-      "type": "integer",
-      "default": 600,
-      "description": "重复提醒最大间隔（秒），每次随机取值"
-    },
-    "re_remind_max_count": {
-      "type": "integer",
-      "default": 3,
-      "description": "最大提醒次数（含首次），超过后自动删除任务"
-    },
-    "max_tasks": {
-      "type": "integer",
-      "default": 20,
-      "description": "最大任务数，超过后拒绝创建新任务"
-    },
-    "max_remind_days": {
-      "type": "integer",
-      "default": 90,
-      "description": "最大允许设置的天数，超过此天数的时间视为 LLM 幻觉，拒绝创建"
-    },
-    "task_expire_days": {
-      "type": "integer",
-      "default": 7,
-      "description": "任务过期自动清理天数（启动时检查）"
-    },
-    "overdue_trigger_seconds": {
-      "type": "integer",
-      "default": 300,
-      "description": "逾时容忍阈值（秒）。重启恢复时，过期的任务只在此阈值内的才立即触发，超过则静默删除，避免消息轰炸。"
-    },
-    "restore_tasks_on_startup": {
-      "type": "boolean",
-      "default": true,
-      "description": "启动时是否自动恢复未完成的任务并重新调度。设为 false 则丢弃所有历史任务。"
-    }
+  "enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用插件"
+  },
+  "api_base": {
+    "type": "string",
+    "default": "",
+    "description": "LLM API 地址（必填，未配置则插件不解析提醒）"
+  },
+  "api_key": {
+    "type": "string",
+    "default": "",
+    "description": "LLM API 密钥"
+  },
+  "model": {
+    "type": "string",
+    "default": "",
+    "description": "LLM 模型名，如 deepseek-chat"
+  },
+  "prompt_template": {
+    "type": "text",
+    "default": "你是一个严格的时间提醒解析助手。\n仅在用户明确要求设置/创建提醒时返回 should_remind:true。\n以下情况必须返回 should_remind=false：\n- 用户只是在讨论时间表、计划，而非请求提醒\n- 用户说\"不提醒\"\"不用了\"\"不需要\"等否定\n- 用户闲聊提到时间但未要求提醒\n仅在用户请求取消已有提醒时返回 should_cancel:true。\n当前已有任务：{tasks}\n当前时间：{time_hint}\n返回 JSON:\n新建：{\"should_remind\":true,\"time\":\"YYYY-MM-DD HH:MM\",\"event\":\"事件简述\",\"is_important\":false}\n取消：{\"should_cancel\":true,\"task_id\":\"匹配ID\",\"reason\":\"原因\"}\n无操作：{\"should_remind\":false,\"should_cancel\":false}\n只返回 JSON，无其他内容。",
+    "description": "分析用户消息是否需要创建/取消提醒的系统提示词。{tasks} 和 {time_hint} 会被替换为实际值。"
+  },
+  "enable_auto_cancel": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用自动取消：从对话中检测取消意图并自动移除任务"
+  },
+  "use_llm_ask": {
+    "type": "bool",
+    "default": true,
+    "description": "重复提醒时是否调用 LLM 生成文案"
+  },
+  "default_ask_text": {
+    "type": "string",
+    "default": "到点了~",
+    "description": "首次提醒的默认文案（use_first_reminder_ai 为 false 时使用）"
+  },
+  "use_first_reminder_ai": {
+    "type": "bool",
+    "default": false,
+    "description": "首次提醒时是否调用 AI 生成文案"
+  },
+  "first_reminder_prompt_template": {
+    "type": "text",
+    "default": "请用纯文本、自然语言的形式生成一句提醒内容。不要使用任何函数调用、指令或代码格式。只要给用户看的最终消息。事件：{event}",
+    "description": "首次提醒时的 LLM 提示词（{event} 会被替换为事件描述）"
+  },
+  "ask_style_template": {
+    "type": "text",
+    "default": "你是一个亲切的朋友，正在提醒用户做某件事。请根据以下信息生成一句简短的提醒，语气自然、贴近生活。\n\n触发类型：{trigger_type}（准时提醒/重复提醒）\n事件：{event}\n这是第 {retry_count} 次提醒。\n\n风格要求：\n- 第一次提醒直接说事\n- 后续提醒可以带一点催促或关切的语气\n- 不要过于正式或生硬\n- 每次生成的文案要有变化\n- 控制在 30 字以内\n\n请只返回提醒文案本身，不需要引号。",
+    "description": "重复提醒时的文案风格模板（{event}、{retry_count}、{trigger_type} 会被替换）"
+  },
+  "enable_re_remind": {
+    "type": "bool",
+    "default": true,
+    "description": "是否启用重复提醒（用户未回复时多次提醒）"
+  },
+  "re_remind_interval_min": {
+    "type": "int",
+    "default": 60,
+    "description": "重复提醒最小间隔（秒）"
+  },
+  "re_remind_interval_max": {
+    "type": "int",
+    "default": 600,
+    "description": "重复提醒最大间隔（秒），每次随机取值"
+  },
+  "re_remind_max_count": {
+    "type": "int",
+    "default": 3,
+    "description": "最大提醒次数（含首次），超过后自动删除任务"
+  },
+  "max_tasks": {
+    "type": "int",
+    "default": 20,
+    "description": "最大任务数，超过后拒绝创建新任务"
+  },
+  "max_remind_days": {
+    "type": "int",
+    "default": 90,
+    "description": "最大允许设置的天数，超过此天数的时间视为 LLM 幻觉，拒绝创建"
+  },
+  "task_expire_days": {
+    "type": "int",
+    "default": 7,
+    "description": "任务过期自动清理天数（启动时检查）"
+  },
+  "overdue_trigger_seconds": {
+    "type": "int",
+    "default": 300,
+    "description": "逾时容忍阈值（秒）。重启恢复时，过期的任务只在此阈值内的才立即触发，超过则静默删除，避免消息轰炸。"
+  },
+  "restore_tasks_on_startup": {
+    "type": "bool",
+    "default": true,
+    "description": "启动时是否自动恢复未完成的任务并重新调度。设为 false 则丢弃所有历史任务。"
   }
 }
